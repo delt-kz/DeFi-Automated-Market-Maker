@@ -3,8 +3,9 @@ pragma solidity ^0.8.24;
 
 import {IERC20} from "./interfaces/IERC20.sol";
 import {LPToken} from "./LPToken.sol";
+import {ReentrancyGuardLite} from "./utils/ReentrancyGuardLite.sol";
 
-contract AMM {
+contract AMM is ReentrancyGuardLite {
     error InvalidToken();
     error IdenticalTokens();
     error ZeroAddress();
@@ -37,9 +38,10 @@ contract AMM {
 
     function addLiquidity(uint256 amount0Desired, uint256 amount1Desired, uint256 minLiquidity)
         external
+        nonReentrant
         returns (uint256 amount0, uint256 amount1, uint256 liquidity)
     {
-        if (amount0Desired == 0 || amount1Desired == 0) revert ZeroAmount();
+        if (amount0Desired < 1 || amount1Desired < 1) revert ZeroAmount();
 
         uint256 totalLiquidity = lpToken.totalSupply();
 
@@ -53,16 +55,16 @@ contract AMM {
             if (amount1Optimal <= amount1Desired) {
                 amount0 = amount0Desired;
                 amount1 = amount1Optimal;
+                liquidity = (amount0Desired * totalLiquidity) / reserve0;
             } else {
                 uint256 amount0Optimal = (amount1Desired * reserve0) / reserve1;
                 amount0 = amount0Optimal;
                 amount1 = amount1Desired;
+                liquidity = (amount1Desired * totalLiquidity) / reserve1;
             }
-
-            liquidity = _min((amount0 * totalLiquidity) / reserve0, (amount1 * totalLiquidity) / reserve1);
         }
 
-        if (liquidity < minLiquidity || liquidity == 0) revert InsufficientLiquidityMinted();
+        if (liquidity < 1 || liquidity < minLiquidity) revert InsufficientLiquidityMinted();
 
         _safeTransferFrom(token0, msg.sender, address(this), amount0);
         _safeTransferFrom(token1, msg.sender, address(this), amount1);
@@ -74,15 +76,16 @@ contract AMM {
 
     function removeLiquidity(uint256 liquidity, uint256 minAmount0, uint256 minAmount1)
         external
+        nonReentrant
         returns (uint256 amount0, uint256 amount1)
     {
-        if (liquidity == 0) revert ZeroAmount();
+        if (liquidity < 1) revert ZeroAmount();
 
         uint256 totalLiquidity = lpToken.totalSupply();
         amount0 = (liquidity * reserve0) / totalLiquidity;
         amount1 = (liquidity * reserve1) / totalLiquidity;
 
-        if (amount0 < minAmount0 || amount1 < minAmount1 || amount0 == 0 || amount1 == 0) {
+        if (amount0 < 1 || amount1 < 1 || amount0 < minAmount0 || amount1 < minAmount1) {
             revert InsufficientLiquidityBurned();
         }
 
@@ -96,16 +99,17 @@ contract AMM {
 
     function swap(address tokenIn, uint256 amountIn, uint256 minAmountOut, address to)
         external
+        nonReentrant
         returns (uint256 amountOut)
     {
-        if (amountIn == 0) revert ZeroAmount();
+        if (amountIn < 1) revert ZeroAmount();
         if (to == address(0)) revert ZeroAddress();
 
-        bool zeroForOne;
-        IERC20 inputToken;
-        IERC20 outputToken;
-        uint256 reserveIn;
-        uint256 reserveOut;
+        bool zeroForOne = false;
+        IERC20 inputToken = token0;
+        IERC20 outputToken = token1;
+        uint256 reserveIn = 0;
+        uint256 reserveOut = 0;
 
         if (tokenIn == address(token0)) {
             zeroForOne = true;
@@ -133,7 +137,7 @@ contract AMM {
     }
 
     function getAmountOut(uint256 amountIn, uint256 reserveIn, uint256 reserveOut) public pure returns (uint256) {
-        if (amountIn == 0 || reserveIn == 0 || reserveOut == 0) revert ZeroAmount();
+        if (amountIn < 1 || reserveIn < 1 || reserveOut < 1) revert ZeroAmount();
 
         uint256 amountInWithFee = amountIn * 997;
         return (amountInWithFee * reserveOut) / ((reserveIn * 1000) + amountInWithFee);
@@ -154,10 +158,6 @@ contract AMM {
 
     function _safeTransfer(IERC20 token, address to, uint256 amount) internal {
         if (!token.transfer(to, amount)) revert InvalidToken();
-    }
-
-    function _min(uint256 x, uint256 y) internal pure returns (uint256) {
-        return x < y ? x : y;
     }
 
     function _sqrt(uint256 y) internal pure returns (uint256 z) {

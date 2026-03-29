@@ -9,6 +9,7 @@ contract LPToken is SimpleERC20 {
     address public immutable amm;
 
     constructor(string memory name_, string memory symbol_, address amm_) SimpleERC20(name_, symbol_, 18) {
+        if (amm_ == address(0)) revert ZeroAddress();
         amm = amm_;
     }
 

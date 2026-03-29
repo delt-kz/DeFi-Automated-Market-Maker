@@ -2,12 +2,10 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "./interfaces/IERC20.sol";
+import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
+import {ReentrancyGuardLite} from "./utils/ReentrancyGuardLite.sol";
 
-interface IPriceOracle {
-    function getPrice() external view returns (uint256);
-}
-
-contract LendingPool {
+contract LendingPool is ReentrancyGuardLite {
     error ZeroAmount();
     error ExceedsMaxLtv();
     error InsufficientCollateral();
@@ -47,8 +45,8 @@ contract LendingPool {
         borrowRatePerSecond = borrowRatePerSecond_;
     }
 
-    function deposit(uint256 amount) external {
-        if (amount == 0) revert ZeroAmount();
+    function deposit(uint256 amount) external nonReentrant {
+        if (amount < 1) revert ZeroAmount();
 
         _accrue(msg.sender);
         positions[msg.sender].collateral += amount;
@@ -57,8 +55,8 @@ contract LendingPool {
         emit Deposit(msg.sender, amount);
     }
 
-    function borrow(uint256 amount) external {
-        if (amount == 0) revert ZeroAmount();
+    function borrow(uint256 amount) external nonReentrant {
+        if (amount < 1) revert ZeroAmount();
 
         _accrue(msg.sender);
 
@@ -75,14 +73,14 @@ contract LendingPool {
         emit Borrow(msg.sender, amount);
     }
 
-    function repay(uint256 amount) external returns (uint256 paid) {
-        if (amount == 0) revert ZeroAmount();
+    function repay(uint256 amount) external nonReentrant returns (uint256 paid) {
+        if (amount < 1) revert ZeroAmount();
 
         _accrue(msg.sender);
 
         Position storage position = positions[msg.sender];
         uint256 currentDebt = position.debt;
-        if (currentDebt == 0) revert NoDebt();
+        if (currentDebt < 1) revert NoDebt();
 
         paid = amount > currentDebt ? currentDebt : amount;
         position.debt = currentDebt - paid;
@@ -92,8 +90,8 @@ contract LendingPool {
         emit Repay(msg.sender, paid);
     }
 
-    function withdraw(uint256 amount) external {
-        if (amount == 0) revert ZeroAmount();
+    function withdraw(uint256 amount) external nonReentrant {
+        if (amount < 1) revert ZeroAmount();
 
         _accrue(msg.sender);
 
@@ -101,7 +99,7 @@ contract LendingPool {
         if (position.collateral < amount) revert InsufficientCollateral();
 
         uint256 remainingCollateral = position.collateral - amount;
-        if (position.debt != 0 && _healthFactor(remainingCollateral, position.debt) <= PRECISION) {
+        if (position.debt > 0 && _healthFactor(remainingCollateral, position.debt) <= PRECISION) {
             revert HealthFactorTooLow();
         }
 
@@ -111,13 +109,17 @@ contract LendingPool {
         emit Withdraw(msg.sender, amount);
     }
 
-    function liquidate(address user, uint256 repayAmount) external returns (uint256 repaid, uint256 collateralSeized) {
-        if (repayAmount == 0) revert ZeroAmount();
+    function liquidate(address user, uint256 repayAmount)
+        external
+        nonReentrant
+        returns (uint256 repaid, uint256 collateralSeized)
+    {
+        if (repayAmount < 1) revert ZeroAmount();
 
         _accrue(user);
 
         Position storage position = positions[user];
-        if (position.debt == 0) revert NoDebt();
+        if (position.debt < 1) revert NoDebt();
         if (_healthFactor(position.collateral, position.debt) >= PRECISION) revert PositionHealthy();
 
         uint256 price = oracle.getPrice();
@@ -127,7 +129,7 @@ contract LendingPool {
         if (repaid > maxRepayFromCollateral) {
             repaid = maxRepayFromCollateral;
         }
-        if (repaid == 0) revert ZeroAmount();
+        if (repaid < 1) revert ZeroAmount();
 
         collateralSeized = (repaid * PRECISION * (100 + LIQUIDATION_BONUS)) / (price * 100);
 
@@ -144,7 +146,7 @@ contract LendingPool {
     function debtOf(address user) public view returns (uint256) {
         Position memory position = positions[user];
 
-        if (position.debt == 0 || position.lastAccrued == 0) {
+        if (position.debt < 1 || position.lastAccrued < 1) {
             return position.debt;
         }
 
@@ -173,12 +175,12 @@ contract LendingPool {
     function _accrue(address user) internal {
         Position storage position = positions[user];
 
-        if (position.lastAccrued == 0) {
+        if (position.lastAccrued < 1) {
             position.lastAccrued = block.timestamp;
             return;
         }
 
-        if (position.debt != 0) {
+        if (position.debt > 0) {
             position.debt = debtOf(user);
         }
 
@@ -186,17 +188,14 @@ contract LendingPool {
     }
 
     function _maxBorrowable(uint256 collateralAmount) internal view returns (uint256) {
-        uint256 collateralValue = (collateralAmount * oracle.getPrice()) / PRECISION;
-        return (collateralValue * MAX_LTV) / 100;
+        return (collateralAmount * oracle.getPrice() * MAX_LTV) / (PRECISION * 100);
     }
 
     function _healthFactor(uint256 collateralAmount, uint256 debtAmount) internal view returns (uint256) {
-        if (debtAmount == 0) {
+        if (debtAmount < 1) {
             return type(uint256).max;
         }
 
-        uint256 collateralValue = (collateralAmount * oracle.getPrice()) / PRECISION;
-        uint256 adjustedCollateral = (collateralValue * LIQUIDATION_THRESHOLD) / 100;
-        return (adjustedCollateral * PRECISION) / debtAmount;
+        return (collateralAmount * oracle.getPrice() * LIQUIDATION_THRESHOLD) / (debtAmount * 100);
     }
 }
