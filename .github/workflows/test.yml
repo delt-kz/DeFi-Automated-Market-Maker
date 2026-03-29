@@ -1,0 +1,35 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  contracts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+
+      - name: Show Foundry version
+        run: forge --version
+
+      - name: Compile contracts
+        run: forge build
+
+      - name: Run tests with gas report
+        run: forge test --gas-report -vvv
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Slither
+        run: pip install slither-analyzer
+
+      - name: Run Slither
+        run: slither . --config-file slither.config.json
